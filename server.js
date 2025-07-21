@@ -6,108 +6,94 @@ import cors from 'cors';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors({
-  origin: ['https://trafficl.vercel.app', 'http://localhost:3000'],
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 
-// Health check
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    service: 'Lighthouse DOM Analysis - ES Modules',
-    timestamp: new Date().toISOString(),
-    version: '2.0.0'
-  });
+  res.json({ status: 'OK', service: 'Lighthouse DOM Analysis' });
 });
 
-// Main DOM analysis endpoint
 app.post('/dom-analysis', async (req, res) => {
   const { url } = req.body;
   
   if (!url) {
-    return res.status(400).json({ error: 'URL is required' });
+    return res.status(400).json({ error: 'URL required' });
   }
 
   let chrome = null;
   
   try {
-    console.log('🔍 Starting Lighthouse DOM analysis for:', url);
+    console.log('🔍 Analyzing:', url);
     
-    // Launch Chrome
-    console.log('🚀 Launching Chrome...');
     chrome = await chromeLauncher.launch({
-      chromeFlags: ['--headless', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+      chromeFlags: ['--headless', '--no-sandbox', '--disable-dev-shm-usage']
     });
     
-    console.log('⚡ Running Lighthouse on port:', chrome.port);
-    
-    // Run Lighthouse
     const options = {
       logLevel: 'info',
       output: 'json',
-      onlyCategories: ['performance'],
       port: chrome.port,
     };
     
     const runnerResult = await lighthouse(url, options);
-    const lighthouseResults = runnerResult.lhr;
+    const audits = runnerResult.lhr.audits;
     
-    console.log('📊 Lighthouse version:', lighthouseResults.lighthouseVersion);
+    let domNodes = 0;
+    let domDepth = 0;
+    let maxChildren = 0;
     
-    // Extract DOM data
-    const domData = extractDOMData(lighthouseResults);
+    if (audits['dom-size']) {
+      if (audits['dom-size'].numericValue) {
+        domNodes = audits['dom-size'].numericValue;
+      }
+      
+      if (audits['dom-size'].details && audits['dom-size'].details.items) {
+        const items = audits['dom-size'].details.items;
+        if (items[0]) domNodes = Math.max(domNodes, items[0].value || 0);
+        if (items[1]) domDepth = items[1].value || 0;
+        if (items[2]) maxChildren = items[2].value || 0;
+      }
+    }
     
-    console.log('✅ DOM analysis complete - nodes:', domData.dom_nodes, 'depth:', domData.dom_depth);
+    let crawlabilityScore = 100;
+    if (domNodes > 1500) crawlabilityScore -= Math.min(30, (domNodes - 1500) / 100);
+    if (domDepth > 32) crawlabilityScore -= Math.min(20, (domDepth - 32) * 2);
+    if (maxChildren > 60) crawlabilityScore -= Math.min(25, (maxChildren - 60));
+    crawlabilityScore = Math.max(0, Math.round(crawlabilityScore));
+    
+    const crawlabilityRisk = crawlabilityScore >= 80 ? 'LOW' : 
+                            crawlabilityScore >= 60 ? 'MEDIUM' : 'HIGH';
+    
+    console.log('✅ Results:', { domNodes, domDepth, maxChildren, crawlabilityScore });
     
     res.json({
       success: true,
       url: url,
-      domData: domData,
-      timestamp: new Date().toISOString(),
-      service: 'Railway Lighthouse CLI v2.0',
-      lighthouse_version: lighthouseResults.lighthouseVersion
+      domData: {
+        dom_nodes: domNodes,
+        dom_depth: domDepth,
+        max_children: maxChildren,
+        crawlability_score: crawlabilityScore,
+        crawlability_risk: crawlabilityRisk,
+        google_lighthouse_version: runnerResult.lhr.lighthouseVersion,
+        analysis_timestamp: new Date().toISOString()
+      }
     });
     
   } catch (error) {
-    console.error('❌ Lighthouse error:', error.message);
-    console.error('Error details:', error);
-    
+    console.error('❌ Error:', error.message);
     res.status(500).json({
       success: false,
       error: error.message,
-      url: url,
-      service: 'Railway Lighthouse CLI v2.0',
-      errorType: error.constructor.name
+      url: url
     });
   } finally {
-    // Always kill Chrome
     if (chrome) {
-      try {
-        await chrome.kill();
-        console.log('🔒 Chrome closed successfully');
-      } catch (killError) {
-        console.log('⚠️ Chrome kill warning:', killError.message);
-      }
+      await chrome.kill();
     }
   }
 });
 
-// Extract DOM data from Lighthouse results
-function extractDOMData(lighthouseResults) {
-  console.log('🔍 Extracting DOM data from Lighthouse results...');
-  
-  const audits = lighthouseResults.audits;
-  
-  let domNodes = 0;
-  let domDepth = 0;
-  let maxChildren = 0;
-  
-  // Extract DOM size data - REAL LIGHTHOUSE DATA
-  if (audits['dom-size']) {
-    console.log('📊 DOM-size audit found');
-    
-    // Try numericValue first
-    if (audits['dom-size'].numericValue)
+app.listen(PORT, () => {
+  console.log(`🔥 Server running on port ${PORT}`);
+});
