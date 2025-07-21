@@ -1,0 +1,16 @@
+{
+  "name": "lighthouse-dom-service",
+  "version": "1.0.0",
+  "description": "Lighthouse CLI DOM analysis service for Railway",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "lighthouse": "^10.4.0",
+    "chrome-launcher": "^0.15.2",
+    "cors": "^2.8.5"
+  }
+}
