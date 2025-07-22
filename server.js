@@ -6,11 +6,12 @@ import cors from 'cors';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// FIXED: Allow all origins - no CORS restrictions
 app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', service: 'Lighthouse DOM Analysis' });
+  res.json({ status: 'OK', service: 'Lighthouse DOM Analysis - CORS Fixed' });
 });
 
 app.post('/dom-analysis', async (req, res) => {
@@ -118,7 +119,7 @@ app.post('/dom-analysis', async (req, res) => {
       success: true,
       url: url,
       domData: {
-        // FIXED: Clean number values
+        // Clean number values
         dom_nodes: domNodes,
         dom_depth: domDepth,
         max_children: maxChildren,
@@ -145,5 +146,5 @@ app.post('/dom-analysis', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🔥 Server running on port ${PORT}`);
+  console.log(`🔥 Server running on port ${PORT} - CORS unrestricted`);
 });
