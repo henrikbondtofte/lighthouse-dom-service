@@ -42,39 +42,89 @@ app.post('/dom-analysis', async (req, res) => {
     let domDepth = 0;
     let maxChildren = 0;
     
+    // FIXED: Proper DOM data extraction
     if (audits['dom-size']) {
+      console.log('📊 DOM-size audit found:', audits['dom-size']);
+      
+      // Extract DOM nodes from numericValue
       if (audits['dom-size'].numericValue) {
         domNodes = audits['dom-size'].numericValue;
+        console.log('🏗️ DOM Nodes from numericValue:', domNodes);
       }
       
+      // Extract from details.items array
       if (audits['dom-size'].details && audits['dom-size'].details.items) {
         const items = audits['dom-size'].details.items;
-        if (items[0]) domNodes = Math.max(domNodes, items[0].value || 0);
-        if (items[1]) domDepth = items[1].value || 0;
-        if (items[2]) maxChildren = items[2].value || 0;
+        console.log('📋 DOM items:', items);
+        
+        // FIXED: Extract actual values correctly
+        if (items[0] && typeof items[0].value === 'number') {
+          domNodes = Math.max(domNodes, items[0].value);
+        } else if (items[0] && items[0].value && typeof items[0].value === 'object' && items[0].value.value) {
+          domNodes = Math.max(domNodes, items[0].value.value);
+        }
+        
+        if (items[1]) {
+          if (typeof items[1].value === 'number') {
+            domDepth = items[1].value;
+          } else if (items[1].value && typeof items[1].value === 'object' && items[1].value.value) {
+            domDepth = items[1].value.value;
+          }
+        }
+        
+        if (items[2]) {
+          if (typeof items[2].value === 'number') {
+            maxChildren = items[2].value;
+          } else if (items[2].value && typeof items[2].value === 'object' && items[2].value.value) {
+            maxChildren = items[2].value.value;
+          }
+        }
       }
     }
     
+    console.log('📊 Final values:', { domNodes, domDepth, maxChildren });
+    
+    // FIXED: Proper crawlability calculation
     let crawlabilityScore = 100;
-    if (domNodes > 1500) crawlabilityScore -= Math.min(30, (domNodes - 1500) / 100);
-    if (domDepth > 32) crawlabilityScore -= Math.min(20, (domDepth - 32) * 2);
-    if (maxChildren > 60) crawlabilityScore -= Math.min(25, (maxChildren - 60));
+    const penalties = [];
+    
+    if (domNodes > 1500) {
+      const penalty = Math.min(30, (domNodes - 1500) / 100);
+      crawlabilityScore -= penalty;
+      penalties.push(`DOM nodes: -${penalty.toFixed(1)}`);
+    }
+    
+    if (domDepth > 32) {
+      const penalty = Math.min(20, (domDepth - 32) * 2);
+      crawlabilityScore -= penalty;
+      penalties.push(`DOM depth: -${penalty.toFixed(1)}`);
+    }
+    
+    if (maxChildren > 60) {
+      const penalty = Math.min(25, (maxChildren - 60));
+      crawlabilityScore -= penalty;
+      penalties.push(`Max children: -${penalty.toFixed(1)} (${maxChildren} > 60 Google limit!)`);
+    }
+    
     crawlabilityScore = Math.max(0, Math.round(crawlabilityScore));
     
     const crawlabilityRisk = crawlabilityScore >= 80 ? 'LOW' : 
                             crawlabilityScore >= 60 ? 'MEDIUM' : 'HIGH';
     
-    console.log('✅ Results:', { domNodes, domDepth, maxChildren, crawlabilityScore });
+    console.log('🎯 Crawlability:', crawlabilityScore, '- Risk:', crawlabilityRisk);
+    console.log('📉 Penalties:', penalties);
     
     res.json({
       success: true,
       url: url,
       domData: {
+        // FIXED: Clean number values
         dom_nodes: domNodes,
         dom_depth: domDepth,
         max_children: maxChildren,
         crawlability_score: crawlabilityScore,
         crawlability_risk: crawlabilityRisk,
+        crawlability_penalties: penalties,
         google_lighthouse_version: runnerResult.lhr.lighthouseVersion,
         analysis_timestamp: new Date().toISOString()
       }
