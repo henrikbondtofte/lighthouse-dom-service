@@ -21,12 +21,18 @@ async function runLighthouseWithErrorCapture(url) {
   return new Promise((resolve, reject) => {
     console.log('🔍 Running enhanced Lighthouse with error capture for:', url);
     
+    // Set timeout to prevent hanging
+    const timeout = setTimeout(() => {
+      lighthouse.kill('SIGTERM');
+      reject(new Error('Lighthouse CLI timeout after 3 minutes'));
+    }, 180000);
+    
     // Run lighthouse CLI to capture stderr output
     const lighthouse = spawn('npx', [
       'lighthouse', 
       url, 
       '--output=json', 
-      '--chrome-flags=--headless',
+      '--chrome-flags=--headless,--no-sandbox,--disable-dev-shm-usage',
       '--preset=desktop',
       '--quiet'
     ], {
@@ -133,8 +139,50 @@ app.post('/dom-analysis', async (req, res) => {
   try {
     console.log('🔍 Analyzing with enhanced error capture:', url);
     
-    // Run enhanced Lighthouse with error capture
-    const { lhr: runnerResult, lighthouseErrors } = await runLighthouseWithErrorCapture(url);
+    let runnerResult, lighthouseErrors;
+    
+    // TRY enhanced method first, fallback to original if it fails
+    try {
+      const enhanced = await runLighthouseWithErrorCapture(url);
+      runnerResult = enhanced.lhr;
+      lighthouseErrors = enhanced.lighthouseErrors;
+      console.log('✅ Enhanced method successful');
+    } catch (enhancedError) {
+      console.log('⚠️ Enhanced method failed, falling back to original:', enhancedError.message);
+      
+      // FALLBACK: Original method
+      let chrome = null;
+      try {
+        chrome = await chromeLauncher.launch({
+          chromeFlags: ['--headless', '--no-sandbox', '--disable-dev-shm-usage']
+        });
+        
+        const options = {
+          logLevel: 'info',
+          output: 'json',
+          port: chrome.port,
+        };
+        
+        const originalResult = await lighthouse(url, options);
+        runnerResult = originalResult.lhr;
+        
+        // Create empty error structure for fallback
+        lighthouseErrors = {
+          dom_pushnode_failures: 0,
+          image_gathering_failures: null,
+          resource_timeouts: [],
+          rendering_budget_exceeded: false,
+          raw_error_log: [],
+          budget_warnings: []
+        };
+        
+        console.log('✅ Fallback method successful');
+      } finally {
+        if (chrome) {
+          await chrome.kill();
+        }
+      }
+    }
     const audits = runnerResult.audits;
     
     let domNodes = 0;
