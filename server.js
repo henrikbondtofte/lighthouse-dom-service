@@ -3,12 +3,10 @@ import lighthouse from 'lighthouse';
 import chromeLauncher from 'chrome-launcher';
 import cors from 'cors';
 import { spawn } from 'child_process';
-import { promisify } from 'util';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// FIXED: Allow all origins - no CORS restrictions
 app.use(cors());
 app.use(express.json());
 
@@ -16,19 +14,13 @@ app.get('/', (req, res) => {
   res.json({ status: 'OK', service: 'Lighthouse DOM Analysis - Enhanced with Real Errors' });
 });
 
-// NEW: Function to run Lighthouse CLI and capture real errors
+// FIXED: Function to run Lighthouse CLI and capture real errors
 async function runLighthouseWithErrorCapture(url) {
   return new Promise((resolve, reject) => {
     console.log('🔍 Running enhanced Lighthouse with error capture for:', url);
     
-    // Set timeout to prevent hanging
-    const timeout = setTimeout(() => {
-      lighthouse.kill('SIGTERM');
-      reject(new Error('Lighthouse CLI timeout after 3 minutes'));
-    }, 180000);
-    
-    // Run lighthouse CLI to capture stderr output
-    const lighthouse = spawn('npx', [
+    // FIXED: Use correct variable name for spawn process
+    const lighthouseProcess = spawn('npx', [
       'lighthouse', 
       url, 
       '--output=json', 
@@ -38,6 +30,13 @@ async function runLighthouseWithErrorCapture(url) {
     ], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    
+    // FIXED: Set timeout with correct process reference
+    const timeout = setTimeout(() => {
+      console.log('⏰ Lighthouse CLI timeout - killing process...');
+      lighthouseProcess.kill('SIGTERM');
+      reject(new Error('Lighthouse CLI timeout after 3 minutes'));
+    }, 180000);
     
     let stdout = '';
     let stderr = '';
@@ -51,12 +50,12 @@ async function runLighthouseWithErrorCapture(url) {
     };
     
     // Capture stdout (JSON result)
-    lighthouse.stdout.on('data', (data) => {
+    lighthouseProcess.stdout.on('data', (data) => {
       stdout += data.toString();
     });
     
     // Capture stderr (where the good stuff is!)
-    lighthouse.stderr.on('data', (data) => {
+    lighthouseProcess.stderr.on('data', (data) => {
       const errorOutput = data.toString();
       stderr += errorOutput;
       
@@ -67,7 +66,7 @@ async function runLighthouseWithErrorCapture(url) {
         // Count DOM.pushNodeByPathToFrontend errors
         if (line.includes('DOM.pushNodeByPathToFrontend')) {
           lighthouseErrors.dom_pushnode_failures++;
-          if (lighthouseErrors.raw_error_log.length < 10) { // Limit log size
+          if (lighthouseErrors.raw_error_log.length < 10) {
             lighthouseErrors.raw_error_log.push(line.trim());
           }
         }
@@ -102,8 +101,18 @@ async function runLighthouseWithErrorCapture(url) {
       });
     });
     
-    lighthouse.on('close', (code) => {
+    lighthouseProcess.on('close', (code) => {
+      clearTimeout(timeout); // FIXED: Clear timeout on completion
+      
+      console.log('🏁 Lighthouse CLI process closed with code:', code);
+      console.log('📝 Stdout length:', stdout.length);
+      console.log('📝 Stderr length:', stderr.length);
+      
       try {
+        if (!stdout.trim()) {
+          throw new Error('No stdout from Lighthouse CLI');
+        }
+        
         // Parse the JSON result
         const result = JSON.parse(stdout);
         
@@ -119,11 +128,15 @@ async function runLighthouseWithErrorCapture(url) {
           lighthouseErrors 
         });
       } catch (error) {
+        console.error('❌ Failed to parse Lighthouse output:', error.message);
+        console.error('📝 Raw stdout preview:', stdout.substring(0, 200));
         reject(new Error(`Failed to parse Lighthouse output: ${error.message}`));
       }
     });
     
-    lighthouse.on('error', (error) => {
+    lighthouseProcess.on('error', (error) => {
+      clearTimeout(timeout); // FIXED: Clear timeout on error
+      console.error('❌ Lighthouse process error:', error.message);
       reject(error);
     });
   });
@@ -138,21 +151,25 @@ app.post('/dom-analysis', async (req, res) => {
 
   try {
     console.log('🔍 Analyzing with enhanced error capture:', url);
+    console.log('🔧 DEBUG: About to try enhanced method...');
     
     let runnerResult, lighthouseErrors;
     
     // TRY enhanced method first, fallback to original if it fails
     try {
+      console.log('🔧 DEBUG: Calling runLighthouseWithErrorCapture...');
       const enhanced = await runLighthouseWithErrorCapture(url);
       runnerResult = enhanced.lhr;
       lighthouseErrors = enhanced.lighthouseErrors;
       console.log('✅ Enhanced method successful');
     } catch (enhancedError) {
       console.log('⚠️ Enhanced method failed, falling back to original:', enhancedError.message);
+      console.log('🔧 DEBUG: Enhanced error stack:', enhancedError.stack?.substring(0, 300));
       
       // FALLBACK: Original method
       let chrome = null;
       try {
+        console.log('🔧 DEBUG: Starting Chrome launcher...');
         chrome = await chromeLauncher.launch({
           chromeFlags: ['--headless', '--no-sandbox', '--disable-dev-shm-usage']
         });
@@ -163,6 +180,7 @@ app.post('/dom-analysis', async (req, res) => {
           port: chrome.port,
         };
         
+        console.log('🔧 DEBUG: Running lighthouse with chrome launcher...');
         const originalResult = await lighthouse(url, options);
         runnerResult = originalResult.lhr;
         
@@ -183,28 +201,24 @@ app.post('/dom-analysis', async (req, res) => {
         }
       }
     }
+    
     const audits = runnerResult.audits;
     
     let domNodes = 0;
     let domDepth = 0;
     let maxChildren = 0;
     
-    // EXISTING: Proper DOM data extraction
+    // Extract DOM data
     if (audits['dom-size']) {
-      console.log('📊 DOM-size audit found:', audits['dom-size']);
+      console.log('📊 DOM-size audit found');
       
-      // Extract DOM nodes from numericValue
       if (audits['dom-size'].numericValue) {
         domNodes = audits['dom-size'].numericValue;
-        console.log('🏗️ DOM Nodes from numericValue:', domNodes);
       }
       
-      // Extract from details.items array
       if (audits['dom-size'].details && audits['dom-size'].details.items) {
         const items = audits['dom-size'].details.items;
-        console.log('📋 DOM items:', items);
         
-        // EXISTING: Extract actual values correctly
         if (items[0] && typeof items[0].value === 'number') {
           domNodes = Math.max(domNodes, items[0].value);
         } else if (items[0] && items[0].value && typeof items[0].value === 'object' && items[0].value.value) {
@@ -231,7 +245,7 @@ app.post('/dom-analysis', async (req, res) => {
     
     console.log('📊 Final DOM values:', { domNodes, domDepth, maxChildren });
     
-    // ENHANCED: Crawlability calculation with real errors
+    // Enhanced crawlability calculation with real errors
     let crawlabilityScore = 100;
     const penalties = [];
     
@@ -289,7 +303,6 @@ app.post('/dom-analysis', async (req, res) => {
       success: true,
       url: url,
       domData: {
-        // EXISTING: Clean number values
         dom_nodes: domNodes,
         dom_depth: domDepth,
         max_children: maxChildren,
@@ -299,7 +312,7 @@ app.post('/dom-analysis', async (req, res) => {
         google_lighthouse_version: runnerResult.lighthouseVersion,
         analysis_timestamp: new Date().toISOString(),
         
-        // NEW: Real Lighthouse errors
+        // Real Lighthouse errors
         lighthouse_real_errors: {
           dom_pushnode_failures: lighthouseErrors.dom_pushnode_failures,
           image_gathering_failures: lighthouseErrors.image_gathering_failures,
@@ -309,7 +322,7 @@ app.post('/dom-analysis', async (req, res) => {
           total_error_count: lighthouseErrors.dom_pushnode_failures + 
                            lighthouseErrors.resource_timeouts.length + 
                            (lighthouseErrors.image_gathering_failures ? 1 : 0),
-          raw_error_sample: lighthouseErrors.raw_error_log.slice(0, 5) // First 5 errors
+          raw_error_sample: lighthouseErrors.raw_error_log.slice(0, 5)
         }
       }
     });
